@@ -224,6 +224,7 @@ class KnexEntityDataProvider implements EntityDataProvider {
     const e = await this.init()
     let cols = [] as any[]
     let colKeys: FieldMetadata[] = []
+    console.log("FIND test", this.entity.dbName);
     for (const x of this.entity.fields) {
       if (options.select && !options.select.includes(x.key)) continue
       if (x.isServerExpression) {
@@ -261,6 +262,11 @@ class KnexEntityDataProvider implements EntityDataProvider {
       query = query.limit(options.limit)
       if (options.page) query = query.offset((options.page - 1) * options.limit)
     }
+
+    if(this.entity.dbName === 'PedidoCartel'){
+      console.log(query.toQuery());
+    }
+
     const r = await query
 
     return r.map((y: any) => {

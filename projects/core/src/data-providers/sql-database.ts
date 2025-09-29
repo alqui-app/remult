@@ -460,6 +460,7 @@ class ActualSQLEntityDataProvider implements EntityDataProvider {
   private buildSelect(e: EntityDbNamesBase, selectedFields?: string[]) {
     let select = ''
     let colKeys: FieldMetadata[] = []
+    console.log("BUILD SELECT proximamente bien armado");
     for (const x of this.entity.fields) {
       if (selectedFields && !selectedFields.includes(x.key)) continue
       if (x.isServerExpression) {
