@@ -222,21 +222,98 @@ class KnexEntityDataProvider implements EntityDataProvider {
   }
   async find(options: EntityDataProviderFindOptions): Promise<any[]> {
     const e = await this.init()
+    
+    /**
+     * OPTIMIZACIÓN CON CTEs (Common Table Expressions)
+     * 
+     * Esta implementación optimiza las queries que contienen campos con sqlExpression
+     * creando CTEs reutilizables en lugar de subqueries repetidos.
+     * 
+     * Beneficios:
+     * - Reduce el tamaño de las queries significativamente
+     * - Mejora el rendimiento al evitar subqueries duplicados
+     * - Mantiene compatibilidad con SQL Server y PostgreSQL
+     */
+
+    const ensureAlias = (sqlExpr: string, alias: string): string => {
+      const sqlNorm = sqlExpr.trim().toLowerCase()
+
+      // Si empieza con "select" pero no tiene " from ", es escalar -> no CTE
+      if (sqlNorm.startsWith("select") && !sqlNorm.includes(" from ")) {
+        return `SELECT ${sqlExpr} as ${alias}`
+      }
+
+      // Si ya es "select ... from (...) as algo"
+      if (/from\s*\([\s\S]+\)\s+as\s+\w+$/i.test(sqlNorm)) {
+        return sqlExpr
+      }
+
+      // Si es "select ..." con FROM pero sin alias de tabla -> lo envolvemos
+      if (sqlNorm.startsWith("select")) {
+        return `SELECT * FROM (${sqlExpr}) as ${alias}`
+      }
+
+      // Por defecto lo devolvemos como está
+      return sqlExpr
+    }
+    
     let cols = [] as any[]
     let colKeys: FieldMetadata[] = []
+    let ctes: { alias: string; sql: any; col: string; field: FieldMetadata }[] = []
+
+    
+
     console.log("FIND test", this.entity.dbName);
     for (const x of this.entity.fields) {
       if (options.select && !options.select.includes(x.key)) continue
       if (x.isServerExpression) {
       } else {
         let name = e.$dbNameOf(x)
-        if (x.options.sqlExpression)
-          name = this.knex.raw('?? as ' + x.key, [name]) as any
-        cols.push(name)
+        if (x.options.sqlExpression){
+          
+          let sqlExpr: string
+
+          if (typeof x.options.sqlExpression === 'string') {
+            sqlExpr = x.options.sqlExpression
+          } else {
+            const result = x.options.sqlExpression(this.entity)
+            sqlExpr = result instanceof Promise ? await result : result
+          }
+          
+          const baseTable = this.entity.dbName.toLowerCase();
+
+          const sqlNorm = sqlExpr.trim().toLowerCase();
+
+          const isJoinable =
+            sqlNorm.includes(" from ") && 
+            !sqlNorm.includes(` from ${baseTable}`);
+
+          if (isJoinable) {
+            const alias = `cte_${x.key}`
+  
+            // nos aseguramos de que el SQL tenga alias de tabla
+            const safeSql = ensureAlias(sqlExpr, alias)
+          
+            const cteQuery = this.knex.queryBuilder().fromRaw(this.knex.raw(safeSql))
+            ctes.push({ alias, sql: cteQuery, col: x.key, field: x })
+          
+            cols.push(this.knex.ref(x.key).withSchema(alias).as(x.key))
+          } else {
+            // Si es una expresión escalar, se mete directo en el SELECT
+            cols.push(this.knex.raw(`${sqlExpr} as ??`, [x.key]))
+          }
+        } else {
+          cols.push(name)
+        }
         colKeys.push(x)
       }
     }
-    let query = this.getEntityFrom(e).select(cols)
+    let query = this.getEntityFrom(e).select(cols);
+
+    // Agregar CTEs a la query principal usando WITH
+    for (const cte of ctes) {
+      query.with(cte.alias, cte.sql);
+    }
 
     if (options?.where) {
       const br = new FilterConsumerBridgeToKnexRequest(
