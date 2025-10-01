@@ -83,3 +83,6 @@ docs/public/pagefind/
 
 # cloudflare
 .wrangler
+
+# permitir dist de este paquete
+!/dist/
