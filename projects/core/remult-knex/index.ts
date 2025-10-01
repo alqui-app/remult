@@ -224,19 +224,41 @@ class KnexEntityDataProvider implements EntityDataProvider {
     const e = await this.init()
     let cols = [] as any[]
     let colKeys: FieldMetadata[] = []
-    console.log("FIND test", this.entity.dbName);
+    const joins: any[] = []
+
     for (const x of this.entity.fields) {
       if (options.select && !options.select.includes(x.key)) continue
       if (x.isServerExpression) {
       } else {
         let name = e.$dbNameOf(x)
-        if (x.options.sqlExpression)
+        if (x.options.sqlExpression) {
           name = this.knex.raw('?? as ' + x.key, [name]) as any
-        cols.push(name)
+          cols.push(name)
+        } else {
+          cols.push(name)
+        }
         colKeys.push(x)
+
+        if (x.options && (x.options as any).joinMetadata) {
+          try {
+            const jm = await (x.options as any).joinMetadata(this.entity)
+            if (jm && jm.alias && jm.table && jm.id && (jm as any).fk) {
+              joins.push(jm)
+            }
+          } catch (err) {
+            // ignore join metadata errors to not break base query
+          }
+        }
       }
     }
     let query = this.getEntityFrom(e).select(cols)
+
+    for (const j of joins) {
+      // left join <table> as <alias> on <alias>.<id> = <fk>
+      query = query.leftJoin({ [j.alias]: j.table }, (join) => {
+        join.on(`${j.alias}.${j.id}`, '=', (j as any).fk)
+      })
+    }
 
     if (options?.where) {
       const br = new FilterConsumerBridgeToKnexRequest(
@@ -263,10 +285,6 @@ class KnexEntityDataProvider implements EntityDataProvider {
       if (options.page) query = query.offset((options.page - 1) * options.limit)
     }
 
-    if(this.entity.dbName === 'PedidoCartel'){
-      console.log(query.toQuery());
-    }
-
     const r = await query
 
     return r.map((y: any) => {
@@ -286,16 +304,26 @@ class KnexEntityDataProvider implements EntityDataProvider {
     })
   }
   async init() {
-    const r = (await dbNamesOfWithForceSqlExpression(
-      this.entity,
-      (x) => x,
-    )) as EntityDbNamesBase
+    const r = (await dbNamesOfWithForceSqlExpression(this.entity, {
+      wrapIdentifier: (x) => x,
+      tableName: true,
+    })) as EntityDbNamesBase
+    const entityName = r.$entityName?.toString?.() || r.$entityName
+    const entityAlias = this.entity.options.sqlExpression
+      ? (entityName.trim().split(/\s+/).pop() as string)
+      : undefined
     return {
       $dbNameOf: (f) => {
         let fm = f as FieldMetadata
         if (fm.options.sqlExpression)
           return this.knex.raw(r.$dbNameOf(f)) as unknown as string
-        return r.$dbNameOf(f)
+        const base = r.$dbNameOf(f)
+        if (entityAlias) {
+          const parts = base.split('.')
+          const col = parts[parts.length - 1]
+          return `${entityAlias}.${col}`
+        }
+        return base
       },
       $entityName: r.$entityName,
       wrapIdentifier: r.wrapIdentifier,

@@ -120,6 +120,13 @@ export interface FieldOptions<entityType = unknown, valueType = unknown> {
   sqlExpression?:
     | string
     | ((entity: EntityMetadata<entityType>) => string | Promise<string>)
+  /** Used or fields that are based on an sql expressions, instead of a physical table column */
+  joinMetadata?: (entityMetadata: EntityMetadata<entityType>) => Promise<{
+    alias: string
+    table: string
+    label: string
+    id: string
+  }>
   /** For fields that shouldn't be part of an update or insert statement */
   dbReadOnly?: boolean
   /** The value converter to be used when loading and saving this field */
